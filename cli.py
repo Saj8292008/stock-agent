@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Stock Agent CLI — paper trading interface."""
 
+import os
 import click
 from rich import box
 from rich.console import Console
@@ -189,6 +190,61 @@ def reset():
             os.remove(DB_PATH)
         port.init_db()
         console.print("[green]Portfolio reset.[/green]")
+
+
+# ── service management ────────────────────────────────────────────────────────
+
+PLIST = os.path.expanduser("~/Library/LaunchAgents/com.stockagent.autorun.plist")
+LABEL = "com.stockagent.autorun"
+
+@cli.command()
+def service():
+    """Show background service status and recent log lines."""
+    import subprocess, os
+    result = subprocess.run(["launchctl", "list", LABEL], capture_output=True, text=True)
+    running = result.returncode == 0
+
+    status_str = "[green bold]RUNNING[/green bold]" if running else "[red bold]STOPPED[/red bold]"
+    console.print(Panel.fit(
+        f"Status: {status_str}\n"
+        f"[dim]Auto-starts on login. Trades 9:30 AM – 4:00 PM ET, Mon–Fri.[/dim]\n"
+        f"[dim]Logs: ~/stock-agent/logs/agent.log[/dim]",
+        title="[bold blue] Stock Agent Service [/bold blue]",
+    ))
+
+    log_path = os.path.expanduser("~/stock-agent/logs/agent.log")
+    err_path  = os.path.expanduser("~/stock-agent/logs/agent.error.log")
+    for path, title in [(err_path, "Recent log (last 20 lines)")]:
+        if os.path.exists(path):
+            lines = open(path).readlines()[-20:]
+            if lines:
+                console.print(f"\n[bold]{title}:[/bold]")
+                for line in lines:
+                    color = "green" if "BUY" in line else "red" if "SELL" in line or "ERROR" in line else "dim"
+                    console.print(f"  [{color}]{line.rstrip()}[/{color}]")
+
+
+@cli.command("service-stop")
+def service_stop():
+    """Stop the background service."""
+    import subprocess
+    r = subprocess.run(["launchctl", "unload", PLIST], capture_output=True, text=True)
+    if r.returncode == 0:
+        console.print("[yellow]Service stopped.[/yellow]")
+    else:
+        console.print(f"[red]Error: {r.stderr}[/red]")
+
+
+@cli.command("service-start")
+def service_start():
+    """Start (or restart) the background service."""
+    import subprocess
+    subprocess.run(["launchctl", "unload", PLIST], capture_output=True)
+    r = subprocess.run(["launchctl", "load", PLIST], capture_output=True, text=True)
+    if r.returncode == 0:
+        console.print("[green]Service started.[/green]")
+    else:
+        console.print(f"[red]Error: {r.stderr}[/red]")
 
 
 # ── auto (market-hours scheduler) ────────────────────────────────────────────
