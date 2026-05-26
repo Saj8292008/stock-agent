@@ -79,6 +79,7 @@ def status():
     tbl2.add_column("Ref Price", justify="right")
     tbl2.add_column("% from Ref", justify="right")
     tbl2.add_column("Signal", justify="center")
+    tbl2.add_column("Targets")
 
     for sym, name in STOCKS.items():
         price     = prices.get(sym)
@@ -87,6 +88,17 @@ def status():
         in_pos    = sym in positions
         price_str = f"${price:.2f}" if price else "[dim]—[/dim]"
         ref_str   = f"${ref:.2f}"   if ref   else "[dim]—[/dim]"
+
+        pos = positions.get(sym)
+        if in_pos and pos:
+            tp  = pos["avg_cost"] * 1.10
+            sl  = pos["avg_cost"] * 0.93
+            target_str = f"[green]TP ${tp:.2f}[/green]  [red]SL ${sl:.2f}[/red]"
+        elif ref:
+            buy_at = ref * 0.95
+            target_str = f"[yellow]Buy < ${buy_at:.2f}[/yellow]"
+        else:
+            target_str = "[dim]—[/dim]"
 
         if pct is None:
             pct_str = "[dim]—[/dim]"
@@ -101,7 +113,7 @@ def status():
             pct_str = f"{pct:+.2f}%"
             sig     = "[dim]watching[/dim]"
 
-        tbl2.add_row(sym, name, price_str, ref_str, pct_str, sig)
+        tbl2.add_row(sym, name, price_str, ref_str, pct_str, sig, target_str)
 
     console.print(tbl2)
 
@@ -177,6 +189,30 @@ def reset():
             os.remove(DB_PATH)
         port.init_db()
         console.print("[green]Portfolio reset.[/green]")
+
+
+# ── auto (market-hours scheduler) ────────────────────────────────────────────
+
+@cli.command()
+def auto():
+    """Run the agent automatically during NYSE market hours (9:30–4 PM ET, Mon–Fri)."""
+    from backend.scheduler import _is_market_open, _seconds_until_open, _now_et
+    from datetime import timedelta
+
+    if _is_market_open():
+        console.print("[green bold]Market is open — starting trading session now.[/green bold]")
+    else:
+        wait = _seconds_until_open()
+        opens_at = _now_et() + timedelta(seconds=wait)
+        console.print(
+            f"[yellow]Market is currently closed.[/yellow]\n"
+            f"Next open: [cyan]{opens_at.strftime('%A %Y-%m-%d %H:%M ET')}[/cyan] "
+            f"([dim]{wait/3600:.1f} h[/dim])"
+        )
+
+    console.print("[dim]Press Ctrl+C to stop.[/dim]")
+    from backend.scheduler import run_scheduler
+    run_scheduler()
 
 
 if __name__ == "__main__":

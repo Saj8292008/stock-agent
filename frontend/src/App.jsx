@@ -30,7 +30,7 @@ function StatCard({ label, value, sub, color = "text-white" }) {
 
 // ── stock price card ───────────────────────────────────────────────────────
 
-function StockCard({ symbol, name, price, ref_price, pct_from_ref, holding }) {
+function StockCard({ symbol, name, price, ref_price, pct_from_ref, holding, position }) {
   const signal =
     holding ? "HOLDING"
     : pct_from_ref != null && pct_from_ref <= -0.05 ? "BUY SIGNAL"
@@ -40,6 +40,11 @@ function StockCard({ symbol, name, price, ref_price, pct_from_ref, holding }) {
     holding ? "bg-cyan-900 text-cyan-300"
     : signal === "BUY SIGNAL" ? "bg-emerald-900 text-emerald-300"
     : "bg-slate-700 text-slate-400";
+
+  // Buy/sell price targets
+  const buyAt  = ref_price != null ? ref_price * 0.95 : null;
+  const tpAt   = position  != null ? position.avg_cost * 1.10 : null;
+  const slAt   = position  != null ? position.avg_cost * 0.93 : null;
 
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-4 flex flex-col gap-2">
@@ -57,6 +62,19 @@ function StockCard({ symbol, name, price, ref_price, pct_from_ref, holding }) {
         <span>Ref {fmt$(ref_price)}</span>
         <span className={pctColor(pct_from_ref)}>{fmtPct(pct_from_ref)} from ref</span>
       </div>
+      {/* buy/sell targets */}
+      {holding && tpAt && slAt ? (
+        <div className="border-t border-slate-700 pt-2 grid grid-cols-2 gap-1 text-xs">
+          <div><span className="text-slate-500">Take profit</span><br/><span className="text-emerald-400 font-semibold">{fmt$(tpAt)}</span></div>
+          <div><span className="text-slate-500">Stop loss</span><br/><span className="text-red-400 font-semibold">{fmt$(slAt)}</span></div>
+        </div>
+      ) : !holding && buyAt ? (
+        <div className="border-t border-slate-700 pt-2 text-xs">
+          <span className="text-slate-500">Buy trigger </span>
+          <span className="text-yellow-400 font-semibold">{fmt$(buyAt)}</span>
+          <span className="text-slate-500"> (−5% from ref)</span>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -199,16 +217,19 @@ export default function App() {
   const [cycling,   setCycling]   = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
   const [chartSymbol, setChartSymbol] = useState("NVDA");
+  const [marketStatus, setMarketStatus] = useState(null);
   const intervalRef = useRef(null);
 
   const fetchAll = useCallback(async () => {
     try {
-      const [pRes, tRes] = await Promise.all([
+      const [pRes, tRes, mRes] = await Promise.all([
         fetch(`${API}/api/portfolio`),
         fetch(`${API}/api/trades?limit=30`),
+        fetch(`${API}/api/market-status`),
       ]);
       setPortfolio(await pRes.json());
       setTrades(await tRes.json());
+      setMarketStatus(await mRes.json());
       setLastUpdate(new Date().toLocaleTimeString());
     } catch {
       // backend may not be running
@@ -251,7 +272,18 @@ export default function App() {
           <h1 className="text-2xl font-bold text-white flex items-center gap-2">
             <Zap className="text-indigo-400" size={24} /> Stock Agent
           </h1>
-          <p className="text-slate-400 text-sm mt-0.5">Paper Trading Dashboard</p>
+          <div className="flex items-center gap-2 mt-1">
+            <p className="text-slate-400 text-sm">Paper Trading Dashboard</p>
+            {marketStatus && (
+              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                marketStatus.is_open
+                  ? "bg-emerald-900 text-emerald-300"
+                  : "bg-slate-700 text-slate-400"
+              }`}>
+                {marketStatus.is_open ? "● MARKET OPEN" : "● MARKET CLOSED"}
+              </span>
+            )}
+          </div>
         </div>
         <div className="flex items-center gap-3">
           {lastUpdate && (
@@ -317,6 +349,7 @@ export default function App() {
                 ref_price={refs[sym]?.ref_price}
                 pct_from_ref={refs[sym]?.pct_from_ref}
                 holding={heldSet.has(sym)}
+                position={holdings.find((h) => h.symbol === sym) || null}
               />
             </div>
           ))}

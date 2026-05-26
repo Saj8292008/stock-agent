@@ -5,6 +5,7 @@ from .config import STOCKS
 from . import portfolio as port
 from .data_feed import get_current_prices, get_price_history
 from .trading_engine import run_cycle
+from .scheduler import _is_market_open, _seconds_until_open, _now_et
 
 app = FastAPI(title="Stock Agent", version="1.0.0")
 
@@ -55,3 +56,17 @@ def manual_cycle():
     prices  = get_current_prices(list(STOCKS.keys()))
     actions = run_cycle(prices)
     return {"status": "ok", "actions": actions, "prices": prices}
+
+
+@app.get("/api/market-status")
+def market_status():
+    open_ = _is_market_open()
+    from datetime import timedelta
+    wait  = _seconds_until_open() if not open_ else 0
+    opens_at = (_now_et() + timedelta(seconds=wait)).isoformat() if not open_ else None
+    return {
+        "is_open":        open_,
+        "current_et":     _now_et().strftime("%Y-%m-%d %H:%M:%S"),
+        "seconds_to_open": wait,
+        "next_open_et":   opens_at,
+    }
