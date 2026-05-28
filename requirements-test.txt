@@ -1,0 +1,22 @@
+# Testing Dependencies for Stock Agent
+
+# Core testing framework
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+pytest-cov>=4.1.0
+pytest-mock>=3.11.0
+
+# HTTP testing and mocking
+httpx>=0.24.0
+responses>=0.23.0
+
+# Time/date mocking
+freezegun>=1.2.0
+
+# FastAPI testing
+fastapi[all]>=0.100.0
+
+# Additional testing utilities
+pytest-xdist>=3.3.0  # Parallel test execution
+pytest-timeout>=2.1.0  # Test timeout protection
+pytest-env>=0.8.0  # Environment variable management
