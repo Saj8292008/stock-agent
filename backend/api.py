@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 # Load configuration from environment
 load_from_env()
 
+# Load emergency stop status from database
+import backend.config as config
+config.EMERGENCY_STOP = port.get_emergency_stop()
+
 app = FastAPI(title="Stock Agent", version="2.0.0")
 
 app.add_middleware(
@@ -71,8 +75,26 @@ def history(symbol: str, period: str = "1mo"):
 
 @app.post("/api/run-cycle")
 def manual_cycle():
-    prices  = get_current_prices(list(STOCKS.keys()))
-    actions = run_cycle(prices)
+    """
+    Manually trigger a trading cycle.
+    Uses broker and risk manager if enabled.
+    """
+    prices = get_current_prices(list(STOCKS.keys()))
+
+    # Initialize broker client if enabled
+    broker_client = None
+    if BROKER_ENABLED:
+        broker_client = get_broker_client()
+
+    # Initialize risk manager if enabled
+    risk_manager = None
+    if config.ENABLE_RISK_MANAGER:
+        from .risk_manager import RiskManager
+        risk_manager = RiskManager()
+
+    # Run cycle with proper clients
+    actions = run_cycle(prices, broker_client, risk_manager)
+
     return {"status": "ok", "actions": actions, "prices": prices}
 
 
@@ -125,7 +147,7 @@ def tradingview_webhook(webhook: TradingViewWebhook):
 
     # Validate passphrase
     if webhook.passphrase != TRADINGVIEW_PASSPHRASE:
-        logger.warning(f"Invalid passphrase in TradingView webhook: {webhook.passphrase[:5]}...")
+        logger.warning("Invalid passphrase in TradingView webhook attempt")
         raise HTTPException(status_code=401, detail="Invalid passphrase")
 
     # Log signal to database
@@ -284,38 +306,40 @@ def get_risk_status_endpoint():
 def emergency_stop_endpoint():
     """
     Emergency stop: Close all positions and block new orders.
-
-    This endpoint triggers the emergency stop flag and optionally closes
-    all open positions if broker is enabled.
+    Sets persistent flag in database.
     """
-    # Set emergency stop flag
-    import backend.config as config
-    config.EMERGENCY_STOP = True
+    try:
+        # Set persistent emergency stop in database
+        port.set_emergency_stop(True)
 
-    result = {"emergency_stop_activated": True, "positions_closed": False}
+        # Also set in config for current session
+        import backend.config as config
+        config.EMERGENCY_STOP = True
 
-    # Close all positions if broker enabled
-    broker_client = get_broker_client()
-    if broker_client:
-        try:
-            success = broker_client.close_all_positions()
-            result["positions_closed"] = success
-            if success:
-                logger.warning("EMERGENCY STOP: All positions closed via broker")
-        except Exception as e:
-            logger.error(f"Failed to close positions during emergency stop: {e}")
-            result["error"] = str(e)
+        # Close positions if broker enabled
+        if BROKER_ENABLED:
+            broker = get_broker_client()
+            if broker:
+                result = broker.close_all_positions()
+                message = f"Emergency stop activated. Closed {len(result.get('closed', []))} positions."
+            else:
+                message = "Emergency stop activated. No broker connection to close positions."
+        else:
+            message = "Emergency stop activated (paper mode - no positions to close)."
 
-    port.log_audit(
-        "EMERGENCY_STOP",
-        None,
-        "EMERGENCY_STOP",
-        result,
-        "EXECUTED",
-        "Emergency stop activated"
-    )
+        port.log_audit(
+            "EMERGENCY_STOP",
+            None,
+            "EMERGENCY_STOP_ACTIVATED",
+            {},
+            "SUCCESS",
+            message
+        )
 
-    return result
+        return {"status": "emergency_stop_activated", "message": message}
+    except Exception as e:
+        logger.error(f"Emergency stop failed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ── Broker Integration ────────────────────────────────────────────────────────

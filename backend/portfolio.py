@@ -68,11 +68,48 @@ def get_cash() -> float:
     return row[0] if row else STARTING_CASH
 
 
-def set_cash(amount: float) -> None:
+def get_emergency_stop() -> bool:
+    """Get emergency stop status from database."""
     con = _conn()
-    con.execute("UPDATE portfolio SET cash = ?, updated_at = ?", (amount, _now()))
-    con.commit()
-    con.close()
+    try:
+        result = con.execute(
+            "SELECT emergency_stop FROM portfolio WHERE id = 1"
+        ).fetchone()
+        return bool(result[0]) if result else False
+    finally:
+        con.close()
+
+
+def set_emergency_stop(enabled: bool) -> None:
+    """Set emergency stop status in database."""
+    con = _conn()
+    try:
+        con.execute(
+            "UPDATE portfolio SET emergency_stop = ? WHERE id = 1",
+            (1 if enabled else 0,)
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
+
+
+def set_cash(amount: float) -> None:
+    """Update cash balance in database with proper error handling."""
+    con = _conn()
+    try:
+        con.execute(
+            "UPDATE portfolio SET cash = ?, updated_at = ? WHERE id = 1",
+            (amount, _now())
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 # ── positions ─────────────────────────────────────────────────────────────────
@@ -85,28 +122,40 @@ def get_positions() -> Dict[str, dict]:
 
 
 def set_position(symbol: str, shares: float, avg_cost: float) -> None:
+    """Update position in database with proper error handling."""
     con = _conn()
-    if shares <= 0:
-        con.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
-    else:
-        con.execute(
-            "INSERT OR REPLACE INTO positions (symbol, shares, avg_cost, updated_at) VALUES (?, ?, ?, ?)",
-            (symbol, shares, avg_cost, _now()),
-        )
-    con.commit()
-    con.close()
+    try:
+        if shares <= 0:
+            con.execute("DELETE FROM positions WHERE symbol = ?", (symbol,))
+        else:
+            con.execute(
+                "INSERT OR REPLACE INTO positions (symbol, shares, avg_cost, updated_at) VALUES (?, ?, ?, ?)",
+                (symbol, shares, avg_cost, _now()),
+            )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 # ── trades ────────────────────────────────────────────────────────────────────
 
 def log_trade(symbol: str, action: str, shares: float, price: float, reason: str = "") -> None:
+    """Log trade to database with proper error handling."""
     con = _conn()
-    con.execute(
-        "INSERT INTO trades (symbol, action, shares, price, total, reason, timestamp) VALUES (?,?,?,?,?,?,?)",
-        (symbol, action, shares, price, shares * price, reason, _now()),
-    )
-    con.commit()
-    con.close()
+    try:
+        con.execute(
+            "INSERT INTO trades (symbol, action, shares, price, total, reason, timestamp) VALUES (?,?,?,?,?,?,?)",
+            (symbol, action, shares, price, shares * price, reason, _now()),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def get_trades(limit: int = 50) -> List[dict]:
@@ -133,13 +182,19 @@ def get_ref_price(symbol: str) -> Optional[float]:
 
 
 def set_ref_price(symbol: str, price: float) -> None:
+    """Set reference price with proper error handling."""
     con = _conn()
-    con.execute(
-        "INSERT OR REPLACE INTO price_refs (symbol, ref_price, updated_at) VALUES (?, ?, ?)",
-        (symbol, price, _now()),
-    )
-    con.commit()
-    con.close()
+    try:
+        con.execute(
+            "INSERT OR REPLACE INTO price_refs (symbol, ref_price, updated_at) VALUES (?, ?, ?)",
+            (symbol, price, _now()),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 # ── snapshot for API ──────────────────────────────────────────────────────────
@@ -189,14 +244,19 @@ def log_audit(
     result: Optional[str] = None,
     message: Optional[str] = None
 ) -> None:
-    """Log an event to the audit trail."""
+    """Log an event to the audit trail with proper error handling."""
     con = _conn()
-    con.execute(
-        "INSERT INTO audit_log (event_type, symbol, user_action, data, result, message, timestamp) VALUES (?,?,?,?,?,?,?)",
-        (event_type, symbol, user_action, json.dumps(data) if data else None, result, message, _now()),
-    )
-    con.commit()
-    con.close()
+    try:
+        con.execute(
+            "INSERT INTO audit_log (event_type, symbol, user_action, data, result, message, timestamp) VALUES (?,?,?,?,?,?,?)",
+            (event_type, symbol, user_action, json.dumps(data) if data else None, result, message, _now()),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 # ── orders ────────────────────────────────────────────────────────────────────
@@ -214,25 +274,30 @@ def log_order(
     signal_id: Optional[int] = None
 ) -> int:
     """
-    Log a new order to the orders table.
+    Log a new order to the orders table with proper error handling.
 
     Returns:
         Order ID (database primary key)
     """
     con = _conn()
-    cur = con.cursor()
-    cur.execute(
-        """INSERT INTO orders (
-            broker_order_id, symbol, side, order_type, quantity,
-            limit_price, stop_price, status, submitted_at, strategy_name, signal_id
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (broker_order_id, symbol, side, order_type, quantity,
-         limit_price, stop_price, status, _now(), strategy_name, signal_id),
-    )
-    order_id = cur.lastrowid
-    con.commit()
-    con.close()
-    return order_id
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """INSERT INTO orders (
+                broker_order_id, symbol, side, order_type, quantity,
+                limit_price, stop_price, status, submitted_at, strategy_name, signal_id
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (broker_order_id, symbol, side, order_type, quantity,
+             limit_price, stop_price, status, _now(), strategy_name, signal_id),
+        )
+        order_id = cur.lastrowid
+        con.commit()
+        return order_id
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def update_order_status(
@@ -244,39 +309,44 @@ def update_order_status(
     canceled_at: Optional[str] = None,
     error_message: Optional[str] = None
 ) -> None:
-    """Update an order's status and fill information."""
+    """Update an order's status and fill information with proper error handling."""
     con = _conn()
-    cur = con.cursor()
+    try:
+        cur = con.cursor()
 
-    updates = ["status = ?"]
-    values = [status]
+        updates = ["status = ?"]
+        values = [status]
 
-    if filled_qty is not None:
-        updates.append("filled_qty = ?")
-        values.append(filled_qty)
+        if filled_qty is not None:
+            updates.append("filled_qty = ?")
+            values.append(filled_qty)
 
-    if avg_fill_price is not None:
-        updates.append("avg_fill_price = ?")
-        values.append(avg_fill_price)
+        if avg_fill_price is not None:
+            updates.append("avg_fill_price = ?")
+            values.append(avg_fill_price)
 
-    if filled_at is not None:
-        updates.append("filled_at = ?")
-        values.append(filled_at)
+        if filled_at is not None:
+            updates.append("filled_at = ?")
+            values.append(filled_at)
 
-    if canceled_at is not None:
-        updates.append("canceled_at = ?")
-        values.append(canceled_at)
+        if canceled_at is not None:
+            updates.append("canceled_at = ?")
+            values.append(canceled_at)
 
-    if error_message is not None:
-        updates.append("error_message = ?")
-        values.append(error_message)
+        if error_message is not None:
+            updates.append("error_message = ?")
+            values.append(error_message)
 
-    query = f"UPDATE orders SET {', '.join(updates)} WHERE id = ?"
-    values.append(order_id)
+        query = f"UPDATE orders SET {', '.join(updates)} WHERE id = ?"
+        values.append(order_id)
 
-    cur.execute(query, values)
-    con.commit()
-    con.close()
+        cur.execute(query, values)
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def get_orders(limit: int = 100, status: Optional[str] = None) -> List[dict]:
@@ -351,25 +421,30 @@ def log_tradingview_signal(
     raw_payload: Optional[str] = None
 ) -> int:
     """
-    Log a TradingView webhook signal.
+    Log a TradingView webhook signal with proper error handling.
 
     Returns:
         Signal ID (database primary key)
     """
     con = _conn()
-    cur = con.cursor()
-    cur.execute(
-        """INSERT INTO tradingview_signals (
-            symbol, action, strategy, price, quantity, stop_loss, take_profit,
-            raw_payload, received_at, status
-        ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
-        (symbol, action, strategy, price, quantity, stop_loss, take_profit,
-         raw_payload, _now(), "pending"),
-    )
-    signal_id = cur.lastrowid
-    con.commit()
-    con.close()
-    return signal_id
+    try:
+        cur = con.cursor()
+        cur.execute(
+            """INSERT INTO tradingview_signals (
+                symbol, action, strategy, price, quantity, stop_loss, take_profit,
+                raw_payload, received_at, status
+            ) VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (symbol, action, strategy, price, quantity, stop_loss, take_profit,
+             raw_payload, _now(), "pending"),
+        )
+        signal_id = cur.lastrowid
+        con.commit()
+        return signal_id
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def get_pending_signals() -> List[dict]:
@@ -399,17 +474,22 @@ def mark_signal_processed(
     order_id: Optional[int] = None,
     rejection_reason: Optional[str] = None
 ) -> None:
-    """Mark a signal as processed (either executed or rejected)."""
+    """Mark a signal as processed (either executed or rejected) with proper error handling."""
     con = _conn()
-    status = "rejected" if rejection_reason else "processed"
-    con.execute(
-        """UPDATE tradingview_signals
-           SET status = ?, processed_at = ?, order_id = ?, rejection_reason = ?
-           WHERE id = ?""",
-        (status, _now(), order_id, rejection_reason, signal_id),
-    )
-    con.commit()
-    con.close()
+    try:
+        status = "rejected" if rejection_reason else "processed"
+        con.execute(
+            """UPDATE tradingview_signals
+               SET status = ?, processed_at = ?, order_id = ?, rejection_reason = ?
+               WHERE id = ?""",
+            (status, _now(), order_id, rejection_reason, signal_id),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def get_signals(limit: int = 50) -> List[dict]:
@@ -473,18 +553,23 @@ def update_daily_metrics(
     largest_win: float = 0,
     largest_loss: float = 0
 ) -> None:
-    """Update or insert daily metrics."""
+    """Update or insert daily metrics with proper error handling."""
     con = _conn()
-    con.execute(
-        """INSERT OR REPLACE INTO daily_metrics (
-            date, starting_value, ending_value, daily_pnl, daily_return_pct,
-            trades_count, winners_count, losers_count, largest_win, largest_loss, updated_at
-        ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-        (date, starting_value, ending_value, daily_pnl, daily_return_pct,
-         trades_count, winners_count, losers_count, largest_win, largest_loss, _now()),
-    )
-    con.commit()
-    con.close()
+    try:
+        con.execute(
+            """INSERT OR REPLACE INTO daily_metrics (
+                date, starting_value, ending_value, daily_pnl, daily_return_pct,
+                trades_count, winners_count, losers_count, largest_win, largest_loss, updated_at
+            ) VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (date, starting_value, ending_value, daily_pnl, daily_return_pct,
+             trades_count, winners_count, losers_count, largest_win, largest_loss, _now()),
+        )
+        con.commit()
+    except Exception:
+        con.rollback()
+        raise
+    finally:
+        con.close()
 
 
 def get_daily_metrics(limit: int = 30) -> List[dict]:

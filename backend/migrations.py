@@ -240,7 +240,8 @@ def migrate_to_v1() -> None:
         'buying_power': 'REAL',
         'margin_used': 'REAL DEFAULT 0',
         'account_value': 'REAL',
-        'last_synced_at': 'TEXT'
+        'last_synced_at': 'TEXT',
+        'emergency_stop': 'INTEGER DEFAULT 0'
     }
 
     for col_name, col_type in new_portfolio_columns.items():

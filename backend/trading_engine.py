@@ -334,7 +334,19 @@ def _execute_paper_order(
     if side == "buy":
         cash = port.get_cash()
         port.set_cash(cash - cost)
-        port.set_position(symbol, quantity, price)
+
+        # Accumulate position (don't overwrite)
+        existing_positions = port.get_positions()
+        if symbol in existing_positions:
+            existing = existing_positions[symbol]
+            old_shares = existing["shares"]
+            old_avg_cost = existing["avg_cost"]
+            new_shares = old_shares + quantity
+            new_avg_cost = ((old_shares * old_avg_cost) + cost) / new_shares
+            port.set_position(symbol, new_shares, new_avg_cost)
+        else:
+            port.set_position(symbol, quantity, price)
+
         port.log_trade(symbol, "BUY", quantity, price, reason)
         logger.info(f"BUY  {quantity:.4f} {symbol} @ ${price:.2f} (paper) — {reason}")
     else:  # sell
