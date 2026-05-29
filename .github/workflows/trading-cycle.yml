@@ -1,0 +1,162 @@
+name: Automated Trading Cycle
+
+on:
+  # Run every 5 minutes during market hours (9:30 AM - 4:00 PM ET / 14:30 - 21:00 UTC)
+  schedule:
+    - cron: '30-59/5 14 * * 1-5'  # 9:30-9:59 AM ET
+    - cron: '*/5 15-20 * * 1-5'    # 10:00 AM - 4:00 PM ET
+    - cron: '0 21 * * 1-5'         # 4:00 PM ET (final)
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+jobs:
+  trading-cycle:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Cache pip dependencies
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/pip
+        key: ${{ runner.os }}-pip-${{ hashFiles('requirements.txt') }}
+        restore-keys: |
+          ${{ runner.os }}-pip-
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Restore database from artifacts
+      uses: actions/download-artifact@v4
+      continue-on-error: true
+      with:
+        name: portfolio-database
+        path: .
+
+    - name: Initialize database (if needed)
+      run: |
+        python -c "from backend import portfolio; portfolio.init_db()"
+
+    - name: Run trading cycle
+      env:
+        BROKER_ENABLED: ${{ secrets.BROKER_ENABLED || 'false' }}
+        TRADINGVIEW_ENABLED: ${{ secrets.TRADINGVIEW_ENABLED || 'true' }}
+        ENABLE_RISK_MANAGER: ${{ secrets.ENABLE_RISK_MANAGER || 'true' }}
+        EMERGENCY_STOP: ${{ secrets.EMERGENCY_STOP || 'false' }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_API_SECRET: ${{ secrets.ALPACA_API_SECRET }}
+        ALPACA_PAPER_MODE: ${{ secrets.ALPACA_PAPER_MODE || 'true' }}
+      run: |
+        python -c "
+        from backend.data_feed import get_current_prices
+        from backend.trading_engine import run_cycle
+        from backend.config import STOCKS
+        from backend import portfolio as port
+        import json
+
+        # Get prices and run cycle
+        prices = get_current_prices(list(STOCKS.keys()))
+        actions = run_cycle(prices)
+
+        # Print results
+        print('=== Trading Cycle Complete ===')
+        if actions:
+            print(f'{len(actions)} trade(s) executed:')
+            for action in actions:
+                print(f\"  {action['action']} {action['symbol']} - {action['shares']:.4f} shares @ \${action['price']:.2f}\")
+        else:
+            print('No trades executed this cycle.')
+
+        # Print portfolio status
+        cash = port.get_cash()
+        positions = port.get_positions()
+        total_value = cash + sum(pos['shares'] * prices.get(sym, pos['avg_cost']) for sym, pos in positions.items())
+
+        print(f'\n=== Portfolio Status ===')
+        print(f'Cash: \${cash:,.2f}')
+        print(f'Total Value: \${total_value:,.2f}')
+        print(f'Positions: {len(positions)}')
+        "
+
+    - name: Show recent trades
+      run: |
+        python -c "
+        from backend import portfolio as port
+
+        trades = port.get_trades(limit=10)
+        if trades:
+            print('\n=== Recent Trades ===')
+            for t in trades:
+                print(f\"{t['timestamp'][:19]} | {t['action']:4} | {t['symbol']:5} | {t['shares']:8.4f} @ \${t['price']:7.2f} | {t['reason']}\")
+        "
+
+    - name: Save database as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: portfolio-database
+        path: stock_agent.db
+        retention-days: 90
+
+    - name: Create trading summary
+      if: always()
+      run: |
+        python -c "
+        from backend import portfolio as port
+        from backend.data_feed import get_current_prices
+        from backend.config import STOCKS
+        from datetime import datetime
+
+        # Get portfolio data
+        cash = port.get_cash()
+        positions = port.get_positions()
+        prices = get_current_prices(list(STOCKS.keys()))
+
+        total_invested = sum(pos['shares'] * prices.get(sym, pos['avg_cost']) for sym, pos in positions.items())
+        total_value = cash + total_invested
+
+        # Get recent trades
+        trades = port.get_trades(limit=5)
+
+        # Create summary
+        summary = f'''# Trading Summary - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+        ## Portfolio Status
+        - **Total Value:** \${total_value:,.2f}
+        - **Cash:** \${cash:,.2f}
+        - **Invested:** \${total_invested:,.2f}
+        - **Open Positions:** {len(positions)}
+
+        ## Recent Trades
+        '''
+
+        if trades:
+            for t in trades:
+                summary += f\"- {t['timestamp'][:19]} | **{t['action']}** {t['symbol']} | {t['shares']:.4f} shares @ \${t['price']:.2f}\\n\"
+        else:
+            summary += '- No recent trades\\n'
+
+        print(summary)
+
+        # Save to file
+        with open('TRADING_SUMMARY.md', 'w') as f:
+            f.write(summary)
+        " >> $GITHUB_STEP_SUMMARY
+
+    - name: Save summary as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: trading-summary
+        path: TRADING_SUMMARY.md
+        retention-days: 30
